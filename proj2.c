@@ -15,9 +15,9 @@
 // Semaphore pointers
 sem_t *s_writeFile = NULL;
 
-sem_t *s_mutex = NULL;
-sem_t *s_oxyQueue = NULL;
-sem_t *s_hydroQueue = NULL;
+sem_t *s_moleculeMutex = NULL;
+sem_t *s_oxygenQueue = NULL;
+sem_t *s_hydrogenQueue = NULL;
 
 sem_t *s_barrierMutex = NULL;
 sem_t *s_barrierTurnstile = NULL;
@@ -42,60 +42,58 @@ int *barrierCount = NULL;
 // Output file pointer
 FILE *fp;
 
-// Semaphore initialization
-void initSempahores()
+// Semaphore and shared memory initialization
+int initialize()
 {    
-    sem_init(s_writeFile, 1, 1);
+    if ((s_writeFile = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0)) == MAP_FAILED) return -1;
 
-    sem_init(s_mutex, 1, 1);
-    sem_init(s_oxyQueue, 1, 0);
-    sem_init(s_hydroQueue, 1, 0);
+    if ((s_moleculeMutex = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0)) == MAP_FAILED) return -1;
+    if ((s_oxygenQueue = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0)) == MAP_FAILED) return -1;
+    if ((s_hydrogenQueue = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0)) == MAP_FAILED) return -1;
 
-    sem_init(s_barrierMutex, 1, 1);
-    sem_init(s_barrierTurnstile, 1, 0);
-    sem_init(s_barrierTurnstile2, 1, 1);
+    if ((s_barrierMutex = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0)) == MAP_FAILED) return -1;
+    if ((s_barrierTurnstile = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0)) == MAP_FAILED) return -1;
+    if ((s_barrierTurnstile2 = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0)) == MAP_FAILED) return -1;
 
-    sem_init(s_maxMoleculeCheckO, 1, 1);
-    sem_init(s_maxMoleculeCheckH, 1, 2);
-    sem_init(s_moleculeCreated, 1, 0);
+    if ((s_maxMoleculeCheckO = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0)) == MAP_FAILED) return -1;
+    if ((s_maxMoleculeCheckH = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0)) == MAP_FAILED) return -1;
+    if ((s_moleculeCreated = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0)) == MAP_FAILED) return -1;
+
+    if ((maxMoleculeCount = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0)) == MAP_FAILED) return -1;
+
+    if ((moleculeCounter = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0)) == MAP_FAILED) return -1;
+    if ((sequenceCounter = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0)) == MAP_FAILED) return -1;
+
+    if ((oxygen = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0)) == MAP_FAILED) return -1;
+    if ((hydrogen = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0)) == MAP_FAILED) return -1;
+
+    if ((barrierCount = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0)) == MAP_FAILED) return -1;
+
+    if ((sem_init(s_writeFile, 1, 1) == -1)) return -1;
+
+    if ((sem_init(s_moleculeMutex, 1, 1) == -1)) return -1;
+    if ((sem_init(s_oxygenQueue, 1, 0) == -1)) return -1;
+    if ((sem_init(s_hydrogenQueue, 1, 0) == -1)) return -1;
+
+    if ((sem_init(s_barrierMutex, 1, 1) == -1)) return -1;
+    if ((sem_init(s_barrierTurnstile, 1, 0) == -1)) return -1;
+    if ((sem_init(s_barrierTurnstile2, 1, 1) == -1)) return -1;
+
+    if ((sem_init(s_maxMoleculeCheckO, 1, 1) == -1)) return -1;
+    if ((sem_init(s_maxMoleculeCheckH, 1, 2) == -1)) return -1;
+    if ((sem_init(s_moleculeCreated, 1, 0) == -1)) return -1;
+
+    return 0;
 }
 
-// Shared memory initialization
-void initSharedMemory()
-{
-    s_writeFile = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-
-    s_mutex = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-    s_oxyQueue = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-    s_hydroQueue = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-
-    s_barrierMutex = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-    s_barrierTurnstile = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-    s_barrierTurnstile2 = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-
-    s_maxMoleculeCheckO  = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-    s_maxMoleculeCheckH = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-    s_moleculeCreated = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-
-    maxMoleculeCount = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-    
-    moleculeCounter = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-    sequenceCounter = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-    
-    oxygen = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-    hydrogen = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-    
-    barrierCount = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-}
-
-// Semaphore cleanup
-void destroySemaphores()
+// Semaphore and shared memory cleanup
+void destroy()
 {
     sem_destroy(s_writeFile);
 
-    sem_destroy(s_mutex);
-    sem_destroy(s_oxyQueue);
-    sem_destroy(s_hydroQueue);
+    sem_destroy(s_moleculeMutex);
+    sem_destroy(s_oxygenQueue);
+    sem_destroy(s_hydrogenQueue);
 
     sem_destroy(s_barrierMutex);
     sem_destroy(s_barrierTurnstile);
@@ -104,16 +102,12 @@ void destroySemaphores()
     sem_destroy(s_maxMoleculeCheckO);
     sem_destroy(s_maxMoleculeCheckH);
     sem_destroy(s_moleculeCreated);
-}
 
-// Shared memory cleanup
-void destroySharedMemory()
-{
     munmap(s_writeFile, sizeof(sem_t));
 
-    munmap(s_mutex, sizeof(sem_t));
-    munmap(s_oxyQueue, sizeof(sem_t));
-    munmap(s_hydroQueue, sizeof(sem_t));
+    munmap(s_moleculeMutex, sizeof(sem_t));
+    munmap(s_oxygenQueue, sizeof(sem_t));
+    munmap(s_hydrogenQueue, sizeof(sem_t));
 
     munmap(s_barrierMutex, sizeof(sem_t));
     munmap(s_barrierTurnstile, sizeof(sem_t));
@@ -136,7 +130,7 @@ void destroySharedMemory()
 
 // Print function for easier printing
 // Print given string to output file with sequence
-// Semaphore is used to prevent problems with print 
+// Semaphore is used to prevent problems with print
 void myPrint(const char *format, ...)
 {
     sem_wait(s_writeFile);
@@ -202,20 +196,20 @@ void oxygenProcess(int idO, int TI, int TB)
 
     // Creating molecule
     // Inspired by the Little Book of Semaphores
-    sem_wait(s_mutex);
+    sem_wait(s_moleculeMutex);
 
     (*oxygen)++;
     if(*hydrogen >= 2)
     {
-        sem_post(s_hydroQueue);
-        sem_post(s_hydroQueue);
+        sem_post(s_hydrogenQueue);
+        sem_post(s_hydrogenQueue);
         (*hydrogen) -= 2;
-        sem_post(s_oxyQueue);
+        sem_post(s_oxygenQueue);
         (*oxygen) -= 1;
     }
     else
     {
-        sem_post(s_mutex);
+        sem_post(s_moleculeMutex);
     }
 
     // Check if the number of molecule that would be created is not larger than the number of molecules that can be created
@@ -228,7 +222,7 @@ void oxygenProcess(int idO, int TI, int TB)
         exit(0);
     }
 
-    sem_wait(s_oxyQueue);
+    sem_wait(s_oxygenQueue);
 
     // Creating molecule
     myPrint("O %d: creating molecule %d\n", idO, (*moleculeCounter));
@@ -254,7 +248,7 @@ void oxygenProcess(int idO, int TI, int TB)
     sem_post(s_maxMoleculeCheckH);
     sem_post(s_maxMoleculeCheckH);
 
-    sem_post(s_mutex);
+    sem_post(s_moleculeMutex);
 
     // Exit successfully
     exit(0);
@@ -277,20 +271,20 @@ void hydrogenProcess(int idH, int TI)
     
     // Creating molecule
     // Inspired by the Little Book of Semaphores
-    sem_wait(s_mutex);
+    sem_wait(s_moleculeMutex);
 
     (*hydrogen)++;
     if((*hydrogen) >= 2 && (*oxygen) >= 1)
     {
-        sem_post(s_hydroQueue);
-        sem_post(s_hydroQueue);
+        sem_post(s_hydrogenQueue);
+        sem_post(s_hydrogenQueue);
         (*hydrogen) -= 2;
-        sem_post(s_oxyQueue);
+        sem_post(s_oxygenQueue);
         (*oxygen) -= 1;
     }
     else
     {        
-        sem_post(s_mutex);
+        sem_post(s_moleculeMutex);
     }
 
     // Check if the number of molecule that would be created is not larger than the number of molecules that can be created
@@ -304,7 +298,7 @@ void hydrogenProcess(int idH, int TI)
         exit(0);
     }
 
-    sem_wait(s_hydroQueue);
+    sem_wait(s_hydrogenQueue);
 
     // Creating molecule
     myPrint("H %d: creating molecule %d\n", idH, (*moleculeCounter));
@@ -361,8 +355,7 @@ int isNumber(char *string)
 int main(int argc, char *argv[])
 {
     // Destroy shared memory preventively
-    destroySharedMemory();
-    destroySemaphores();
+    destroy();
 
     // Get command line arguments and check for validity
     if (argc != 5)
@@ -382,16 +375,20 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    initSharedMemory();
-    initSempahores();
-
+    
     // Create file for output / open for reading
     fp = fopen("proj2.out", "w");
     if (fp == NULL)
     {
         fprintf(stderr, "Problem creating file.\n");
-        destroySharedMemory();
-        destroySemaphores();
+        destroy();
+        return 1;
+    }
+
+    if (initialize() != 0) // Initialize shared memory
+    {
+        fprintf(stderr, "Could not initialize shared memory.\n");
+        destroy();
         return 1;
     }
 
@@ -448,8 +445,7 @@ int main(int argc, char *argv[])
     fclose(fp);    
 
     // Deallocate resources
-    destroySharedMemory();
-    destroySemaphores();
-
+    destroy();
+    
     return 0;
 }
