@@ -5,15 +5,12 @@
 #include <unistd.h>
 #include <semaphore.h>
 #include <sys/mman.h>
-#include <sys/types.h>
 #include <sys/wait.h>
-#include <sys/ipc.h>
 #include <sys/shm.h>
 #include <ctype.h>
 #include <stdbool.h>
 #include <stdarg.h>
-#include <fcntl.h>
-#include <sys/stat.h>
+#include <string.h>
 
 // Semaphore pointers
 sem_t *s_writeFile = NULL;
@@ -45,7 +42,7 @@ int *barrierCount = NULL;
 // Output file pointer
 FILE *fp;
 
-// Function definition
+// Semaphore initialization
 void initSempahores()
 {    
     sem_init(s_writeFile, 1, 1);
@@ -63,6 +60,7 @@ void initSempahores()
     sem_init(s_moleculeCreated, 1, 0);
 }
 
+// Shared memory initialization
 void initSharedMemory()
 {
     s_writeFile = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
@@ -90,6 +88,7 @@ void initSharedMemory()
     barrierCount = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
 }
 
+// Semaphore cleanup
 void destroySemaphores()
 {
     sem_destroy(s_writeFile);
@@ -107,6 +106,7 @@ void destroySemaphores()
     sem_destroy(s_moleculeCreated);
 }
 
+// Shared memory cleanup
 void destroySharedMemory()
 {
     munmap(s_writeFile, sizeof(sem_t));
@@ -134,6 +134,9 @@ void destroySharedMemory()
     munmap(barrierCount, sizeof(int));
 }
 
+// Print function for easier printing
+// Print given string to output file with sequence
+// Semaphore is used to prevent problems with print 
 void myPrint(const char *format, ...)
 {
     sem_wait(s_writeFile);
@@ -148,6 +151,9 @@ void myPrint(const char *format, ...)
     sem_post(s_writeFile);
 }
 
+// Barrier function
+// Inspired by the Little Book of Semaphores
+// Part one is before critical section, waits for all processes to reach the barrier
 void barrierWait1()
 {
     sem_wait(s_barrierMutex);
@@ -163,6 +169,7 @@ void barrierWait1()
     sem_post(s_barrierTurnstile);
 }
 
+// After the critical section
 void barrierWait2()
 {
     sem_wait(s_barrierMutex);
@@ -178,8 +185,10 @@ void barrierWait2()
     sem_post(s_barrierTurnstile2);
 }
 
-void oxygenProcess(int idO, int NO, int TI, int TB)
+// Process of oxygen
+void oxygenProcess(int idO, int TI, int TB)
 {
+    // Set the seed of rand to get truly random numbers
     srand(time(NULL) * getpid());
 
     // Started
@@ -192,6 +201,7 @@ void oxygenProcess(int idO, int NO, int TI, int TB)
     myPrint("O %d: going to queue\n", idO);    
 
     // Creating molecule
+    // Inspired by the Little Book of Semaphores
     sem_wait(s_mutex);
 
     (*oxygen)++;
@@ -208,45 +218,52 @@ void oxygenProcess(int idO, int NO, int TI, int TB)
         sem_post(s_mutex);
     }
 
+    // Check if the number of molecule that would be created is not larger than the number of molecules that can be created
+    // If it is, we know that the process wouldn't be able to create a molecule so it is ended
     sem_wait(s_maxMoleculeCheckO);
     if (*moleculeCounter > *maxMoleculeCount)
     {
-        myPrint("O %d: not enough H\n", idO);
         sem_post(s_maxMoleculeCheckO);
-        // sem_post(s_mutex);
+        myPrint("O %d: not enough H\n", idO);
         exit(0);
     }
 
     sem_wait(s_oxyQueue);
 
-    barrierWait1();
-
+    // Creating molecule
     myPrint("O %d: creating molecule %d\n", idO, (*moleculeCounter));
 
     // Sleep <0, TB>
     usleep(((rand() % (TB + 1)) * 1000));
 
+    barrierWait1();
+
+    // Tell the two other hydrogen atoms that the molecule is created
+    sem_post(s_moleculeCreated);
+    sem_post(s_moleculeCreated);
+
     // Molecule created    
     myPrint("O %d: molecule %d created\n", idO, (*moleculeCounter));
-
-    sem_post(s_moleculeCreated);
-    sem_post(s_moleculeCreated);
 
     barrierWait2();
 
     (*moleculeCounter)++;
 
+    // Post the semaphore for checking the number of molecules to max number
     sem_post(s_maxMoleculeCheckO);
     sem_post(s_maxMoleculeCheckH);
     sem_post(s_maxMoleculeCheckH);
 
     sem_post(s_mutex);
 
+    // Exit successfully
     exit(0);
 }
 
-void hydrogenProcess(int idH, int NH, int TI)
+// Process of hydrogen
+void hydrogenProcess(int idH, int TI)
 {
+    // Set the seed of rand to get truly random numbers
     srand(time(NULL) * getpid());
 
     // Started
@@ -259,6 +276,7 @@ void hydrogenProcess(int idH, int NH, int TI)
     myPrint("H %d: going to queue\n", idH);
     
     // Creating molecule
+    // Inspired by the Little Book of Semaphores
     sem_wait(s_mutex);
 
     (*hydrogen)++;
@@ -275,6 +293,8 @@ void hydrogenProcess(int idH, int NH, int TI)
         sem_post(s_mutex);
     }
 
+    // Check if the number of molecule that would be created is not larger than the number of molecules that can be created
+    // If it is, we know that the process wouldn't be able to create a molecule so it is ended
     sem_wait(s_maxMoleculeCheckH);
     if (*moleculeCounter > *maxMoleculeCount)
     {
@@ -286,39 +306,77 @@ void hydrogenProcess(int idH, int NH, int TI)
 
     sem_wait(s_hydroQueue);
 
-    barrierWait1();
-    
+    // Creating molecule
     myPrint("H %d: creating molecule %d\n", idH, (*moleculeCounter));
 
+    barrierWait1();    
+
+    // Wait until oxygen molecule tells the hydrogens that the molecule is created
     sem_wait(s_moleculeCreated);
 
+    // Molecule created
     myPrint("H %d: molecule %d created\n", idH, (*moleculeCounter));
 
     barrierWait2();
 
+    // Exit successfully
     exit(0);
 }
 
+// Check if a string is a number
+// Used in argument checking
+// All positive numbers return the number
+// Negative numbers, empty strings or strings with characters other than 0-9 return -1
+int isNumber(char *string)
+{
+    bool isNumber = true;
+
+    if(strcmp(string, "") == 0)
+    {
+        isNumber = false;
+    }
+    else
+    {
+        for (size_t i = 0; i < strlen(string); i++)
+        {
+            if(!isdigit(string[i]))
+            {
+                isNumber = false;
+                break;
+            }
+        }
+    }
+
+    if(isNumber)
+    {
+        return atoi(string);
+    }
+    else
+    {
+        return -1;
+    }    
+}
+
 // Main function
-int main(int argc, char const *argv[])
+int main(int argc, char *argv[])
 {
     // Destroy shared memory preventively
     destroySharedMemory();
     destroySemaphores();
 
-    // Get command line arguments
+    // Get command line arguments and check for validity
     if (argc != 5)
     {
         fprintf(stderr, "Wrong arguments supplied.\n");
         return 1;
     }
 
-    int NO = atoi(argv[1]); // Number of oxygens
-    int NH = atoi(argv[2]); // Number of hydrogens
-    int TI = atoi(argv[3]); // Maximum time in ms for atom to wait before queing
-    int TB = atoi(argv[4]); // Maximum time in ms needed to create one molecule
+    int NO = isNumber(argv[1]); // Number of oxygens
+    int NH = isNumber(argv[2]); // Number of hydrogens
+    int TI = isNumber(argv[3]); // Max time before queue
+    int TB = isNumber(argv[4]); // Max time to create molecule
 
-    if (NO < 0 || NH < 0 || TI < 0 || TI > 1000 || TB < 0 || TB > 1000) // Check if arguments are valid
+    if (NO < 1 || NH < 1 || TI < 0 || TI > 1000 || TB < 0 || TB > 1000) // Check if arguments are valid
     {
         fprintf(stderr, "Wrong arguments supplied.\n");
         return 1;
@@ -327,23 +385,29 @@ int main(int argc, char const *argv[])
     initSharedMemory();
     initSempahores();
 
-    // Create file for output
+    // Create file for output / open for reading
     fp = fopen("proj2.out", "w");
     if (fp == NULL)
     {
         fprintf(stderr, "Problem creating file.\n");
+        destroySharedMemory();
+        destroySemaphores();
         return 1;
     }
 
+    // Set buffering to avoid problems with printing
     setbuf(fp, NULL);
-    setbuf(stdout, NULL);
 
-    *sequenceCounter = 1;
-    *oxygen = 0;
-    *hydrogen = 0;
-    *barrierCount = 0;
-    *moleculeCounter = 1;
+    // Initialize shared variables
+    *oxygen = 0;          // Number of queing oxygens 
+    *hydrogen = 0;        // Number of queing hydrogens
+    *barrierCount = 0;    // Number of processes in barrier
 
+    *sequenceCounter = 1; // Order of prints
+    *moleculeCounter = 1; // Number of molecules created
+
+    // Calculate the maximum number of molecules
+    // Used to check if there is enough atoms
     if (NO < 1 || NH < 2)
     {
         *maxMoleculeCount = 0;
@@ -363,7 +427,7 @@ int main(int argc, char const *argv[])
         pid_t oxygenPid = fork();
         if (oxygenPid == 0) // Child process
         {
-            oxygenProcess(i, NO, TI, TB);
+            oxygenProcess(i, TI, TB);
             return 0;
         }
     }
@@ -373,16 +437,17 @@ int main(int argc, char const *argv[])
         pid_t hydrogenPid = fork();
         if (hydrogenPid == 0) // Child process
         {
-            hydrogenProcess(i, NH, TI);
+            hydrogenProcess(i, TI);
             return 0;
         }
     }
 
-    // Wait for processes to finish
+    // Wait for all child processes to finish
     while(wait(NULL) > 0);
     
     fclose(fp);    
-    
+
+    // Deallocate resources
     destroySharedMemory();
     destroySemaphores();
 
