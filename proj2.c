@@ -10,6 +10,10 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <ctype.h>
+#include <stdbool.h>
+#include <stdarg.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 
 // Semaphore pointers
 sem_t *s_writeFile;
@@ -22,7 +26,15 @@ sem_t *s_barrierMutex;
 sem_t *s_barrierTurnstile;
 sem_t *s_barrierTurnstile2;
 
+sem_t *s_maxMoleculeCheckO;
+sem_t *s_maxMoleculeCheckH;
+
+sem_t *s_moleculeCreated;
+
+
 // Shared memory pointers
+int *maxMoleculeCount = NULL;
+
 int *moleculeCounter = NULL;
 int *sequenceCounter = NULL;
 
@@ -37,19 +49,24 @@ FILE *fp;
 // Function definition
 void initSempahores()
 {
-    s_writeFile = sem_open("/xstrel03/s_writeFile", O_CREAT, 0666, 1);
+    s_writeFile = sem_open("/xstrel03/s_writeFile", O_CREAT | O_EXCL, 0666, 1);
 
-    s_mutex = sem_open("/xstrel03/s_mutex", O_CREAT, 0666, 1);
-    s_oxyQueue = sem_open("/xstrel03/s_oxyQueue", O_CREAT, 0666, 0);
-    s_hydroQueue = sem_open("/xstrel03/s_hydroQueue", O_CREAT, 0666, 0);
+    s_mutex = sem_open("/xstrel03/s_mutex", O_CREAT | O_EXCL, 0666, 1);
+    s_oxyQueue = sem_open("/xstrel03/s_oxyQueue", O_CREAT | O_EXCL, 0666, 0);
+    s_hydroQueue = sem_open("/xstrel03/s_hydroQueue", O_CREAT | O_EXCL, 0666, 0);
 
-    s_barrierMutex = sem_open("/xstrel03/s_barrierMutex", O_CREAT, 0666, 1);
-    s_barrierTurnstile = sem_open("/xstrel03/s_barrierTurnstile", O_CREAT, 0666, 0);
-    s_barrierTurnstile2 = sem_open("/xstrel03/s_barrierTurnstile2", O_CREAT, 0666, 1);
+    s_barrierMutex = sem_open("/xstrel03/s_barrierMutex", O_CREAT | O_EXCL, 0666, 1);
+    s_barrierTurnstile = sem_open("/xstrel03/s_barrierTurnstile", O_CREAT | O_EXCL, 0666, 0);
+    s_barrierTurnstile2 = sem_open("/xstrel03/s_barrierTurnstile2", O_CREAT | O_EXCL, 0666, 1);
+
+    s_maxMoleculeCheckO = sem_open("/xstrel03/s_maxMoleculeCheck", O_CREAT | O_EXCL, 0666, 1);
+    s_maxMoleculeCheckH = sem_open("/xstrel03/s_maxMoleculeCheck", O_CREAT | O_EXCL, 0666, 2);
+    s_moleculeCreated = sem_open("/xstrel03/s_moleculeCreated", O_CREAT | O_EXCL, 0666, 0);
 }
 
 void initSharedMemory()
 {
+    maxMoleculeCount = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
     sequenceCounter = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
     oxygen = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
     hydrogen = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
@@ -61,22 +78,37 @@ void destroySemaphores()
 {
     sem_close(s_writeFile);
     sem_unlink("/xstrel03/s_writeFile");
+
     sem_close(s_mutex);
     sem_unlink("/xstrel03/s_mutex");
+
     sem_close(s_oxyQueue);
     sem_unlink("/xstrel03/s_oxyQueue");
+
     sem_close(s_hydroQueue);
     sem_unlink("/xstrel03/s_hydroQueue");
+    
     sem_close(s_barrierMutex);
     sem_unlink("/xstrel03/s_barrierMutex");
+    
     sem_close(s_barrierTurnstile);
     sem_unlink("/xstrel03/s_barrierTurnstile");
     sem_close(s_barrierTurnstile2);
     sem_unlink("/xstrel03/s_barrierTurnstile2");
+
+    sem_close(s_maxMoleculeCheckO);
+    sem_unlink("/xstrel03/s_maxMoleculeCheckO");
+    sem_close(s_maxMoleculeCheckH);
+    sem_unlink("/xstrel03/s_maxMoleculeCheckH");
+    
+    sem_close(s_moleculeCreated);
+    sem_unlink("/xstrel03/s_moleculeCreated");
+
 }
 
 void destroySharedMemory()
 {
+    munmap(maxMoleculeCount, sizeof(int));
     munmap(sequenceCounter, sizeof(int));
     munmap(oxygen, sizeof(int));
     munmap(hydrogen, sizeof(int));
@@ -84,9 +116,22 @@ void destroySharedMemory()
     munmap(moleculeCounter, sizeof(int));
 }
 
-int barrierWait(char element, int id)
+void myPrint(const char *format, ...)
 {
-    
+    sem_wait(s_writeFile);
+    va_list args;
+    va_start(args, format);
+    fprintf(fp, "%d: ", *sequenceCounter);
+    fflush(fp);
+    vfprintf(fp, format, args);
+    fflush(fp);
+    (*sequenceCounter)++;
+    va_end(args);
+    sem_post(s_writeFile);
+}
+
+void barrierWait1()
+{
     sem_wait(s_barrierMutex);
     (*barrierCount)++;
     if (*barrierCount == 3)
@@ -98,16 +143,10 @@ int barrierWait(char element, int id)
 
     sem_wait(s_barrierTurnstile);
     sem_post(s_barrierTurnstile);
+}
 
-    // Critical point
-    sem_wait(s_writeFile);
-    int molecule = (*moleculeCounter);
-    fprintf(fp, "%d: %c %d: creating molecule %d\n", *sequenceCounter, element, id, molecule);
-    fflush(fp);
-    (*sequenceCounter)++;
-    sem_post(s_writeFile);
-
-
+void barrierWait2()
+{
     sem_wait(s_barrierMutex);
     (*barrierCount)--;
     if (*barrierCount == 0)
@@ -119,33 +158,24 @@ int barrierWait(char element, int id)
 
     sem_wait(s_barrierTurnstile2);
     sem_post(s_barrierTurnstile2);
-
-    return molecule;
 }
 
-void oxygenProcess(int idO, int TI, int TB)
+void oxygenProcess(int idO, int NO, int TI, int TB)
 {
     srand(time(NULL) * getpid());
 
     // Started
-    sem_wait(s_writeFile);
-    fprintf(fp, "%d: O %d: started\n", *sequenceCounter, idO);
-    fflush(fp);
-    (*sequenceCounter)++;
-    sem_post(s_writeFile);
+    myPrint("O %d: started\n", idO);
 
     // Sleep <0, TI>
     usleep(((rand() % (TI + 1)) * 1000));
     
     // Going to queue
-    sem_wait(s_writeFile);
-    fprintf(fp, "%d: O %d: going to queue\n", *sequenceCounter, idO);
-    fflush(fp);
-    (*sequenceCounter)++;
-    sem_post(s_writeFile);
+    myPrint("O %d: going to queue\n", idO);    
 
     // Creating molecule
     sem_wait(s_mutex);
+
     (*oxygen)++;
     if(*hydrogen >= 2)
     {
@@ -160,52 +190,59 @@ void oxygenProcess(int idO, int TI, int TB)
         sem_post(s_mutex);
     }
 
+    sem_wait(s_maxMoleculeCheckO);
+    if (*moleculeCounter > *maxMoleculeCount)
+    {
+        myPrint("O %d: not enough H\n", idO);
+        sem_post(s_maxMoleculeCheckO);
+        // sem_post(s_mutex);
+        return;
+    }
+
     sem_wait(s_oxyQueue);
 
-    int molecule = barrierWait('O', idO);
-
-    (*moleculeCounter)++;
-
-    sem_post(s_mutex);
-
+    myPrint("O %d: creating molecule %d\n", idO, (*moleculeCounter));
 
     // Sleep <0, TB>
     usleep(((rand() % (TB + 1)) * 1000));
 
-    // Molecule created
-    sem_wait(s_writeFile);
-    fprintf(fp, "%d: O %d: molecule %d created\n", *sequenceCounter, idO, molecule);
-    fflush(fp);
-    (*sequenceCounter)++;
-    sem_post(s_writeFile);
+    barrierWait1();
 
-    exit(0);
+    // Molecule created    
+    myPrint("O %d: molecule %d created\n", idO, (*moleculeCounter));
+
+    sem_post(s_moleculeCreated);
+    sem_post(s_moleculeCreated);
+
+    barrierWait2();
+
+    (*moleculeCounter)++;
+
+    sem_post(s_maxMoleculeCheckO);
+    sem_post(s_maxMoleculeCheckH);
+    sem_post(s_maxMoleculeCheckH);
+
+    sem_post(s_mutex);
+
+    return;
 }
 
-void hydrogenProcess(int idH, int TI)
+void hydrogenProcess(int idH, int NH, int TI)
 {
     srand(time(NULL) * getpid());
-    
+
     // Started
-    sem_wait(s_writeFile);
-    fprintf(fp, "%d: H %d: started\n", *sequenceCounter, idH);
-    fflush(fp);
-    (*sequenceCounter)++;
-    sem_post(s_writeFile);
+    myPrint("H %d: started\n", idH);
 
     // Sleep <0, TI>
     usleep(((rand() % (TI + 1)) * 1000));
     
     // Going to queue
-    sem_wait(s_writeFile);
-    fprintf(fp, "%d: H %d: going to queue\n", *sequenceCounter, idH);
-    fflush(fp);
-    (*sequenceCounter)++;
-    sem_post(s_writeFile);
-
+    myPrint("H %d: going to queue\n", idH);
+    
     // Creating molecule
-
     sem_wait(s_mutex);
+
     (*hydrogen)++;
     if((*hydrogen) >= 2 && (*oxygen) >= 1)
     {
@@ -216,24 +253,39 @@ void hydrogenProcess(int idH, int TI)
         (*oxygen) -= 1;
     }
     else
-    {
+    {        
         sem_post(s_mutex);
     }
 
+    sem_wait(s_maxMoleculeCheckH);
+    if (*moleculeCounter > *maxMoleculeCount)
+    {
+        myPrint("H %d: not enough O or H\n", idH);
+        sem_post(s_maxMoleculeCheckH);
+        return;
+    }
+
     sem_wait(s_hydroQueue);
+
+    barrierWait1();
     
-    // Molecule created
+    myPrint("H %d: creating molecule %d\n", idH, (*moleculeCounter));
 
-    int molecule = barrierWait('H', idH);
+    sem_wait(s_moleculeCreated);
 
-    exit(0);
+    myPrint("H %d: molecule %d created\n", idH, (*moleculeCounter));
+
+    barrierWait2();
+
+    return;
 }
 
 // Main function
 int main(int argc, char const *argv[])
 {
+    // Destroy shared memory preventively
     destroySemaphores();
-    destroySharedMemory();
+    // destroySharedMemory();
 
     // Get command line arguments
     if (argc != 5)
@@ -273,14 +325,27 @@ int main(int argc, char const *argv[])
     *barrierCount = 0;
     *moleculeCounter = 1;
 
+    if (NO < 1 || NH < 2)
+    {
+        *maxMoleculeCount = 0;
+    }
+    else if (NO > NH/2)
+    {
+        *maxMoleculeCount = NH/2; 
+    }
+    else
+    {
+        *maxMoleculeCount = NO;
+    }
+
     // Create processes to create oxygen and hydrogen
     for (int i = 1; i <= NO; i++)
     {
         pid_t oxygenPid = fork();
         if (oxygenPid == 0) // Child process
         {
-            oxygenProcess(i, TI, TB);
-            exit(0);
+            oxygenProcess(i, NO, TI, TB);
+            return 0;
         }
     }
 
@@ -289,15 +354,14 @@ int main(int argc, char const *argv[])
         pid_t hydrogenPid = fork();
         if (hydrogenPid == 0) // Child process
         {
-            hydrogenProcess(i, TI);
-            exit(0);
+            hydrogenProcess(i, NH, TI);
+            return 0;
         }
     }
 
-
     // Wait for processes to finish
     while(wait(NULL) > 0);
-
+    
     destroySemaphores();
     destroySharedMemory();
 
