@@ -1,3 +1,10 @@
+// File: proj2.c
+// Subject: IOS
+// Project: #2
+// Author: Matyáš Strelec, FIT VUT
+// Login: xstrel03
+// Date: 28. 4. 2022
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
